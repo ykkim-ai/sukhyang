@@ -119,8 +119,75 @@ def _year_record(rows, fs, notes, y):
     return rec
 
 
+Q_END_MONTH = {REPRT_Q1: 3, REPRT_H1: 6, REPRT_Q3: 9}
+
+
+def _cum_pair(rows, key, reprt):
+    """당기·전년 동기 누적값(손익계산서 계정). 같은 기간끼리 짝짓고, 1분기는 분기값 = 누적값."""
+    pairs = [("thstrm_add_amount", "frmtrm_add_amount")]
+    if reprt == REPRT_Q1:
+        pairs.append(("thstrm_amount", "frmtrm_q_amount"))
+    cur = prev = None
+    for f_cur, f_prev in pairs:
+        cur = extract(rows, key, fields=(f_cur,))
+        prev = extract(rows, key, fields=(f_prev,))
+        if cur is not None and prev is not None:
+            break
+    return cur, prev
+
+
+def _ttm(fy, rows, key, reprt):
+    """사업연도 값 + 다음 해 누적 - 그 해 같은 기간 누적 = 최근 12개월."""
+    cur, prev = _cum_pair(rows, key, reprt) if rows else (None, None)
+    return fy + cur - prev if None not in (fy, cur, prev) else None
+
+
+def _ttm_basis(client, code, fs, recs, latest, latest_sh, quarter, q_rows, share_basis, acc_mt, notes):
+    """최근 4분기(TTM) 기준 EPS 3개 구간과 최신 분기말 BPS.
+    구간이 겹치지 않도록 1년씩 민다: 사업연도 순이익 + 다음 해 누적 - 그 해 같은 기간 누적."""
+    reprt = quarter["reprt"]
+    m = Q_END_MONTH[reprt]
+    calendar = acc_mt in ("", "12")  # 12월 결산이 아니면 달력 월을 표기하지 않는다
+    ni_key = "ni_owner" if fs == "CFS" else "ni_total"
+
+    def q_shares(year):
+        try:
+            return (parse_shares(client.stock_total(code, year, reprt)) or {}).get("adjusted")
+        except DartError:
+            return None
+
+    sh0 = q_shares(latest + 1) or latest_sh
+    eps, labels = [], []
+    for k in range(3):
+        y = latest - k
+        rows = q_rows
+        if k:
+            try:
+                rows = client.fin_all(code, y + 1, reprt, fs)
+            except DartError:
+                rows = None
+        ni = _ttm(recs[y].get("ni"), rows, ni_key, reprt)
+        sh = sh0 if k == 0 or share_basis != "year" else (q_shares(y + 1) or recs[y].get("adj_shares") or sh0)
+        eps.append(ni / sh if ni is not None and sh else None)
+        labels.append(f"{y + 1}년 EPS (TTM {y}.{m + 1:02d}~{y + 1}.{m:02d})" if calendar
+                      else f"{y + 1}년 EPS (TTM, {y + 1}사업연도 {REPRT_NAME[reprt]}까지 12개월)")
+    if None in eps:
+        notes.append("최근 4분기(TTM) 기준: 과거 같은 분기 보고서가 없어 일부 구간을 계산하지 못했습니다.")
+
+    equity = extract(q_rows, "equity_owner") if fs == "CFS" else None
+    if equity is None:
+        equity = extract(q_rows, "equity_total")
+    bps = equity / sh0 if equity is not None and sh0 else None
+    w = weighted_eps(*eps)
+    bps_when = f"{latest + 1}.{m:02d}월말 {REPRT_NAME[reprt]}" if calendar \
+        else f"{latest + 1}사업연도 {REPRT_NAME[reprt]} 기준"
+    return {"eps": tuple(eps), "labels": tuple(labels), "shares": sh0,
+            "bps": bps, "bps_label": f"{latest + 1}년 BPS ({bps_when})", "w_eps": w,
+            "iv": intrinsic_value(bps, w), "name": f"최근 4분기 TTM ({quarter['label']} 반영)"}
+
+
 def analyze(client, corp, deposit_rate=None, rate_date=None, share_basis="year",
-            include_lease=False, manual_price=None, today=None):
+            include_lease=False, manual_price=None, value_basis="annual", today=None):
     today = today or dt.date.today()
     code = corp["corp_code"]
     notes, sources = [], []
@@ -194,28 +261,19 @@ def analyze(client, corp, deposit_rate=None, rate_date=None, share_basis="year",
                      "). 주식분할·병합이라면 사이드바에서 '최근 주식수 일괄 적용'으로 비교하세요.")
 
     # 최신 분기 (TTM, 최신 순현금)
-    quarter = None
+    quarter, q_rows = None, None
     for reprt in (REPRT_Q3, REPRT_H1, REPRT_Q1):
         try:
             q_rows = client.fin_all(code, latest + 1, reprt, fs)
         except DartError:
             q_rows = None
         if q_rows:
-            # 당기·전년 동기는 같은 기간(누적)끼리 짝지어 뺀다. 1분기는 분기값 = 누적값
-            ni_key = "ni_owner" if fs == "CFS" else "ni_total"
-            pairs = [("thstrm_add_amount", "frmtrm_add_amount")]
-            if reprt == REPRT_Q1:
-                pairs.append(("thstrm_amount", "frmtrm_q_amount"))
-            cur = prev = None
-            for f_cur, f_prev in pairs:
-                cur = extract(q_rows, ni_key, fields=(f_cur,))
-                prev = extract(q_rows, ni_key, fields=(f_prev,))
-                if cur is not None and prev is not None:
-                    break
-            fy_ni = recs[latest].get("ni")
-            ttm = fy_ni + cur - prev if None not in (fy_ni, cur, prev) else None
-            quarter = {"label": f"{latest + 1}년 {REPRT_NAME[reprt]}", "ttm_ni": ttm,
+            L0 = recs[latest]
+            ttm = _ttm(L0.get("ni"), q_rows, "ni_owner" if fs == "CFS" else "ni_total", reprt)
+            quarter = {"label": f"{latest + 1}년 {REPRT_NAME[reprt]}", "reprt": reprt, "ttm_ni": ttm,
                        "ttm_eps": ttm / latest_sh if ttm is not None and latest_sh else None,
+                       "ttm_revenue": _ttm(L0.get("revenue"), q_rows, "revenue", reprt),
+                       "ttm_op": _ttm(L0.get("op"), q_rows, "op", reprt),
                        "net_cash": parse_net_cash(q_rows, include_lease),
                        "rcept_no": q_rows[0].get("rcept_no")}
             sources.append((quarter["label"] + f"({FS_NAME[fs]})", quarter["rcept_no"]))
@@ -229,13 +287,26 @@ def analyze(client, corp, deposit_rate=None, rate_date=None, share_basis="year",
         if price is None:
             notes.append(f"주가 조회 실패: {price_src}. 사이드바에서 주가를 직접 입력하세요.")
 
+    # 내재가치: 연간(지침 원식)과 최근 4분기 TTM 두 기준을 모두 계산하고 선택한 쪽을 주 결과로
     L = recs[latest]
-    eps_l = L.get("eps")
-    eps_1 = recs[latest - 1].get("eps")
-    eps_2 = recs[latest - 2].get("eps")
-    bps_l = L.get("bps")
-    w = weighted_eps(eps_l, eps_1, eps_2)
-    iv = intrinsic_value(bps_l, w)
+    annual_eps = (L.get("eps"), recs[latest - 1].get("eps"), recs[latest - 2].get("eps"))
+    annual_w = weighted_eps(*annual_eps)
+    annual = {"eps": annual_eps, "labels": tuple(f"{y}년 EPS" for y in (latest, latest - 1, latest - 2)),
+              "bps": L.get("bps"), "bps_label": f"{latest}년 BPS", "w_eps": annual_w,
+              "iv": intrinsic_value(L.get("bps"), annual_w), "name": "연간 사업보고서 (지침 원식)"}
+    acc_mt = (info.get("acc_mt") or "").strip()
+    ttm_b = _ttm_basis(client, code, fs, recs, latest, latest_sh, quarter, q_rows, share_basis, acc_mt, notes) \
+        if quarter else None
+    if value_basis == "ttm" and ttm_b and ttm_b["iv"] is not None:
+        basis, alt = ttm_b, annual
+    else:
+        if value_basis == "ttm" and not quarter:
+            # 사업보고서 직후~1분기보고서 전: 사업보고서가 가장 최신이라 TTM = 연간
+            notes.append(f"최신 공시가 {latest}년 사업보고서라 연간 기준으로 계산했습니다(이 시점에는 TTM과 같음).")
+        elif value_basis == "ttm":
+            notes.append("최근 4분기 TTM 기준을 계산할 수 없어 연간 사업보고서 기준으로 계산했습니다.")
+        basis, alt = annual, ttm_b
+    (eps_l, eps_1, eps_2), bps_l, w, iv = basis["eps"], basis["bps"], basis["w_eps"], basis["iv"]
 
     # 순현금: 최신 분기 우선, 없으면 최근 사업연도
     if quarter and quarter["net_cash"]:
@@ -259,12 +330,14 @@ def analyze(client, corp, deposit_rate=None, rate_date=None, share_basis="year",
     induty = (info.get("induty_code") or "").strip()
     result = {
         "corp": corp, "info": info, "today": today.isoformat(), "latest": latest, "fs": fs,
-        "years": years, "recs": recs, "quarter": quarter,
+        "years": years, "recs": recs, "quarter": quarter, "ttm": ttm_b,
         "price": price, "price_date": price_date, "price_src": price_src,
         "deposit_rate": deposit_rate, "rate_date": rate_date,
         "share_basis": share_basis, "include_lease": include_lease,
         "shares": L.get("shares"), "latest_shares": latest_sh,
         "eps": (eps_l, eps_1, eps_2), "bps": bps_l, "w_eps": w, "iv": iv,
+        "eps_labels": basis["labels"], "bps_label": basis["bps_label"], "basis_name": basis["name"],
+        "alt": alt if alt and alt["iv"] is not None else None,
         "discount": discount_rate(iv, price), "upside": upside(iv, price),
         "conservative": conservative, "conditions": conditions,
         "net_cash_detail": nc_detail, "net_cash_basis": nc_basis,
@@ -358,6 +431,22 @@ def pct(x):
     return "확인 불가" if x is None else f"{x:,.1f}%"
 
 
+def ttm_summary(res):
+    """10년 재무 표 끝에 붙일 최근 12개월(TTM) 칸. 최신 분기보고서가 없으면 None."""
+    q = res.get("quarter")
+    if not q or q["ttm_ni"] is None:
+        return None
+    t = res.get("ttm") or {}
+    eps = t["eps"][0] if t.get("eps") else q["ttm_eps"]
+    bps = t.get("bps")
+    rev, op = q.get("ttm_revenue"), q.get("ttm_op")
+    return {"label": f"{res['latest'] + 1} TTM", "revenue": rev, "op": op, "ni": q["ttm_ni"],
+            "eps": eps, "bps": bps,
+            "roe": eps / bps * 100 if eps is not None and bps else None,
+            "op_margin": op / rev * 100 if op is not None and rev else None,
+            "net_cash": q["net_cash"]["net_cash"] if q.get("net_cash") else None}
+
+
 def build_report(res, grade=None, memo=""):
     c, L = res["corp"], res["latest"]
     e0, e1, e2 = res["eps"]
@@ -372,7 +461,8 @@ def build_report(res, grade=None, memo=""):
              f"- 예금금리: {str(res['deposit_rate']) + '%' if res['deposit_rate'] else '미입력'}"
              + (f" (조회일 {res['rate_date']})" if res.get("rate_date") else ""),
              f"- 주식수 기준: {'연도별 자사주 제외 주식수' if res['share_basis'] == 'year' else f'{L}년 자사주 제외 주식수 일괄 적용'}",
-             f"- 순현금 리스부채: {'포함' if res['include_lease'] else '제외'}", ""]
+             f"- 순현금 리스부채: {'포함' if res['include_lease'] else '제외'}",
+             f"- 내재가치 기준: {res['basis_name']}", ""]
 
     info = res["info"]
     lines += ["## 1. 기업 개요", "",
@@ -395,10 +485,14 @@ def build_report(res, grade=None, memo=""):
             "-" if r.get("roe") is None else f"{r['roe']:.1f}%",
             eok(r.get("ocf")), eok(r.get("fcf")),
             "-" if r.get("dps") is None else f"{r['dps']:,.0f}", eok(r.get("net_cash"))))
-    if res["quarter"] and res["quarter"]["ttm_ni"] is not None:
-        q = res["quarter"]
-        lines += ["", f"참고: {q['label']} 기준 최근 12개월(TTM) 순이익 {eok(q['ttm_ni'])}억원, "
-                      f"TTM EPS {won(q['ttm_eps'])} (추정, 내재가치 계산에는 사용하지 않음)"]
+    t = ttm_summary(res)
+    if t:
+        lines.append("| {} | {} | {} | {} | {} | {} | {} | - | - | - | {} |".format(
+            f"**{t['label']}**", eok(t["revenue"]), eok(t["op"]), eok(t["ni"]),
+            "-" if t["eps"] is None else f"{t['eps']:,.0f}", "-" if t["bps"] is None else f"{t['bps']:,.0f}",
+            "-" if t["roe"] is None else f"{t['roe']:.1f}%", eok(t["net_cash"])))
+        lines += ["", f"{t['label']}: {res['quarter']['label']}까지 반영한 최근 12개월 실적, "
+                      "BPS·순현금은 최신 분기말 기준"]
 
     lines += ["", "## 3~6. 숙향의 네 가지 투자조건", "", "| 조건 | 실제 수치 | 기준 | 판정 |", "|---|---|---|---|"]
     for row in res["conditions"]:
@@ -415,17 +509,24 @@ def build_report(res, grade=None, memo=""):
                   "- 자동 분류 결과입니다. 금융자산의 사용 제한 여부는 주석에서 확인하세요."]
 
     sh = res["shares"] or {}
-    lines += ["", "## 7~11. 숙향식 내재가치", "",
+    l0, l1, l2 = res["eps_labels"]
+    lines += ["", f"## 7~11. 숙향식 내재가치 ({res['basis_name']})", "",
               "| 항목 | 결과 |", "|---|---|",
               f"| 현재 주가 | {won(res['price'])} |",
-              f"| {L}년 EPS | {won(e0)} |", f"| {L - 1}년 EPS | {won(e1)} |", f"| {L - 2}년 EPS | {won(e2)} |",
-              f"| 가중평균 EPS | {won(res['w_eps'])} |", f"| {L}년 BPS | {won(res['bps'])} |",
+              f"| {l0} | {won(e0)} |", f"| {l1} | {won(e1)} |", f"| {l2} | {won(e2)} |",
+              f"| 가중평균 EPS | {won(res['w_eps'])} |", f"| {res['bps_label']} | {won(res['bps'])} |",
               f"| 숙향식 내재가치 | {won(res['iv'])} |",
               f"| 내재가치 대비 할인율 | {pct(res['discount'])} |",
               f"| 내재가치까지 상승여력 | {pct(res['upside'])} |"]
     cons = res["conservative"]
     lines.append(f"| 보수적 참고가치 | {won(cons['value']) if cons else '계산 불가'} |")
+    alt = res.get("alt")
+    if alt:
+        lines.append(f"| 참고: {alt['name']} 내재가치 | {won(alt['iv'])} |")
     lines += ["", "계산 과정", ""]
+    if res["basis_name"].startswith("최근 4분기"):
+        lines.append("- 구간별 EPS = (사업연도 순이익 + 다음 해 같은 분기까지 누적 순이익 − 그 해 같은 분기까지 누적 순이익)"
+                     " ÷ 분기말 자사주 제외 주식수. 구간이 겹치지 않게 1년씩 밀어 3개 구간을 구함")
     if sh:
         lines.append(f"- 조정주식수 = 발행주식수 {sh['issued']:,.0f} − 자기주식 {sh['treasury']:,.0f} "
                      f"= {sh['adjusted']:,.0f}주 ({sh['basis']}, {L}년말)")

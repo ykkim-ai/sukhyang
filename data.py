@@ -122,14 +122,14 @@ class DartClient:
         return self._get("company.json", {"corp_code": corp_code})
 
     def fin_all(self, corp_code, year, reprt, fs_div):
-        cacheable = reprt == REPRT_FY and year < dt.date.today().year
+        cacheable = year < dt.date.today().year  # 지난 연도 보고서(분기 포함)는 확정 자료
         d = self._get("fnlttSinglAcntAll.json",
                       {"corp_code": corp_code, "bsns_year": str(year),
                        "reprt_code": reprt, "fs_div": fs_div}, cacheable)
         return d["list"] if d else None
 
     def stock_total(self, corp_code, year, reprt=REPRT_FY):
-        cacheable = reprt == REPRT_FY and year < dt.date.today().year
+        cacheable = year < dt.date.today().year
         d = self._get("stockTotqySttus.json",
                       {"corp_code": corp_code, "bsns_year": str(year), "reprt_code": reprt}, cacheable)
         return d["list"] if d else None

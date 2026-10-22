@@ -1,5 +1,6 @@
-streamlit>=1.45
-pandas>=2.0
-requests>=2.31
-finance-datareader>=0.9.90
-pykrx>=1.0.45
+# PC에서 동작을 확인한 버전으로 고정 (Streamlit Cloud가 새 버전을 받아 앱이 깨지는 것 방지)
+streamlit==1.61.0
+pandas==2.3.3
+requests==2.34.2
+finance-datareader==0.9.202
+pykrx==1.2.4

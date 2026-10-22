@@ -28,9 +28,10 @@ Markdown 리포트로 내려받습니다. 최종 등급(매수 검토 후보 / �
 
 1. GitHub에 **Private** 저장소를 만들고 이 폴더를 올립니다. `.gitignore` 덕분에 `secrets.toml`과 `.dart_cache`는 올라가지 않습니다.
 2. https://share.streamlit.io 에 GitHub 계정으로 로그인 → **Create app** → 저장소 선택, Main file path는 `app.py`.
-3. **Advanced settings → Secrets**에 아래 한 줄을 넣고 Python 버전은 3.11 이상을 고릅니다.
+3. **Advanced settings → Secrets**에 아래를 넣고 Python 버전은 3.11을 고릅니다(패키지 버전은 requirements.txt에 고정).
 
         DART_API_KEY = "발급받은_인증키"
+        DEPOSIT_RATE = 2.5   # 선택: 사이드바 예금금리 기본값(%)
 
 4. 배포 후 앱 **Settings → Sharing**에서 본인만 볼 수 있게 설정합니다.
 
@@ -42,6 +43,14 @@ Markdown 리포트로 내려받습니다. 최종 등급(매수 검토 후보 / �
 - `app.py` 화면
 - `sukhyang.py` 지침의 계산식(가중평균 EPS, 내재가치, 할인율, 상승여력), 네 가지 조건 판정, 장기 검증, 리포트
 - `data.py` DART 조회, 계정 찾기, 순현금 분류, 주가 조회
+
+## 내재가치 기준 (사이드바에서 선택)
+
+- **최근 4분기 TTM (기본값)**: 최신 분기보고서까지 반영합니다. 예) 2026년 반기보고서가 최신이면
+  EPS 구간은 2025.07~2026.06, 2024.07~2025.06, 2023.07~2024.06 (구간이 겹치지 않게 1년씩 밀어 3:2:1 가중평균),
+  BPS는 2026.06월말 자본 ÷ 같은 시점 자사주 제외 주식수. PER·PBR 조건도 같은 기준을 씁니다.
+- **연간 사업보고서 (지침 원식)**: 최근 3개 사업연도 EPS와 최근 사업연도말 BPS.
+- 고르지 않은 쪽 내재가치도 '참고'로 함께 표시됩니다.
 
 ## 알아둘 한계
 
