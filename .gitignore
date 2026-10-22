@@ -1,0 +1,14 @@
+# 인증키 — 절대 올리지 않음 (Streamlit Cloud에서는 Settings → Secrets에 입력)
+.streamlit/secrets.toml
+
+# DART 자료 캐시
+.dart_cache/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# 내려받은 리포트
+*_숙향분석_*.md
