@@ -125,7 +125,8 @@ if submitted and query:
         st.session_state["matches"] = DartClient(api_key).search(query)
         st.session_state.pop("result", None)
         st.session_state.pop("params", None)
-        auto_run = len(st.session_state["matches"]) == 1
+        found = st.session_state["matches"]
+        auto_run = len(found) == 1 and found[0].get("exact")  # 비슷한 이름만 찾았으면 직접 고르게
     except DartError as e:
         st.error(str(e))
 
@@ -134,8 +135,9 @@ if matches is not None:
     if not matches:
         st.warning("일치하는 상장사가 없습니다. 정확한 회사명이나 종목코드로 다시 검색하세요.")
     else:
-        labels = [f"{m['corp_name']} ({m['stock_code']})" for m in matches]
-        pick = st.selectbox("분석할 회사", labels) if len(matches) > 1 else labels[0]
+        labels = [f"{m['corp_name']} ({m['stock_code']})"
+                  + (f" · {m['short']}" if m.get("short") and m["short"] != m["corp_name"] else "") for m in matches]
+        pick = st.selectbox(f"분석할 회사 ({len(matches)}개 찾음)", labels) if len(matches) > 1 else labels[0]
         corp = matches[labels.index(pick)]
         if st.button(f"{corp['corp_name']} 분석하기", type="primary") or auto_run:
             with st.spinner("DART에서 10년치 공시를 모으는 중입니다. 처음엔 1분 정도 걸립니다."):

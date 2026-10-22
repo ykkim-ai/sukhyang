@@ -107,16 +107,48 @@ class DartClient:
             json.dump(items, f, ensure_ascii=False)
         return items
 
+    # 종목코드 → 거래소 종목명(약칭). DART는 정식 명칭(현대자동차), 거래소는 약칭(현대차)을 쓴다
+    def krx_names(self):
+        path = os.path.join(self.cache_dir, "krx_names.json")
+        if os.path.exists(path) and time.time() - os.path.getmtime(path) < 86400:
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)
+        try:
+            import FinanceDataReader as fdr
+            df = fdr.StockListing("KRX")
+            names = {str(c).zfill(6): str(n) for c, n in zip(df["Code"], df["Name"])}
+        except Exception:  # noqa: BLE001  해외 서버 등에서 못 받으면 DART 이름으로만 검색
+            return {}
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(names, f, ensure_ascii=False)
+        return names
+
     def search(self, name):
+        """정확히 일치(이름·약칭) → 글자 포함 → 글자 순서 일치 순으로 모두 나열.
+        정확히 일치한 회사는 exact=True, short에는 거래소 약칭."""
         name = name.strip()
         items = self.corp_list()
+        krx = self.krx_names()
         if re.fullmatch(r"\d{6}", name):
-            return [c for c in items if c["stock_code"] == name]
-        exact = [c for c in items if c["corp_name"] == name]
-        if exact:
-            return exact
+            return [dict(c, exact=True, short=krx.get(name, "")) for c in items if c["stock_code"] == name]
         key = _clean(name).lower()
-        return [c for c in items if key in _clean(c["corp_name"]).lower()][:30]
+
+        def names(c):
+            return [n for n in (_clean(c["corp_name"]).lower(), _clean(krx.get(c["stock_code"], "")).lower()) if n]
+
+        by_len = lambda c: len(c["corp_name"])  # noqa: E731  짧은 이름이 보통 찾는 회사
+        exact, contains, subseq = [], [], []
+        for c in items:
+            ns = names(c)
+            if key in ns:
+                exact.append(c)
+            elif any(key in n for n in ns):
+                contains.append(c)
+            elif any(_subsequence(key, n) for n in ns):
+                subseq.append(c)
+        exact_codes = {c["corp_code"] for c in exact}
+        ordered = exact + sorted(contains, key=by_len) + sorted(subseq, key=by_len)
+        return [dict(c, exact=c["corp_code"] in exact_codes, short=krx.get(c["stock_code"], "")) for c in ordered][:50]
 
     def company(self, corp_code):
         return self._get("company.json", {"corp_code": corp_code})
@@ -161,6 +193,12 @@ def to_num(v):
 
 def _clean(s):
     return re.sub(r"[\s·]", "", s or "")
+
+
+def _subsequence(key, text):
+    """key의 글자가 text에 순서대로 들어 있는지 (현대차 → 현대자동차)."""
+    it = iter(text)
+    return all(ch in it for ch in key)
 
 
 def _ord(r):
