@@ -336,12 +336,15 @@ def parse_shares(rows):
 
 
 def parse_dividend(rows):
-    out = {"dps": None, "payout": None, "total_mil": None}
+    out = {"dps": None, "payout": None, "total_mil": None, "yield": None}
     for r in rows or []:
         se, kind = _clean(r.get("se")), _clean(r.get("stock_knd"))
         v = to_num(r.get("thstrm"))
-        if "주당현금배당금" in se and kind in ("", "-", "보통주") and out["dps"] is None:
+        common = kind in ("", "-") or kind.startswith("보통")  # 공시에 따라 '보통주' 또는 '보통주식'
+        if "주당현금배당금" in se and common and out["dps"] is None:
             out["dps"] = v
+        elif "현금배당수익률" in se and common and out["yield"] is None:
+            out["yield"] = v  # 시가배당률: 회사가 공시한 배당기준일 무렵 주가 기준 수익률
         elif "현금배당성향" in se and out["payout"] is None:
             out["payout"] = v
         elif "현금배당금총액" in se and out["total_mil"] is None:

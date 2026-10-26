@@ -24,6 +24,13 @@ Markdown 리포트로 내려받습니다. 최종 등급(매수 검토 후보 / �
 처음 분석은 DART 호출이 30회 정도라 1분가량 걸리고, 지난 연도 자료는 이 폴더의 `.dart_cache`에 저장돼 다음부터 빠릅니다.
 저장된 자료는 90일이 지나면 다시 받습니다. 정정공시를 바로 반영하려면 사이드바의 '캐시 비우고 새로 받기'를 누르세요.
 
+## 파일과 주식 스크리너 연결
+
+- `app.py`: 페이지 설정과 사이드바(인증키)만 두고 화면은 `sukhyang_ui.py` 를 부릅니다.
+- `sukhyang_ui.py`: 검색·분석·결과 화면. 주식 스크리너(`Desktop\CLAUDE\stock-screener`)의 '숙향 정밀분석' 화면과 종목 탭도
+  이 파일을 그대로 불러 쓰므로, 여기를 고치면 두 앱에 같이 반영됩니다.
+- `sukhyang.py`(계산), `data.py`(DART 조회·계정 분류)도 스크리너가 함께 씁니다.
+
 ## 휴대폰·외부에서 쓰기 (Streamlit Community Cloud, 무료)
 
 1. GitHub에 **Private** 저장소를 만들고 이 폴더를 올립니다. `.gitignore` 덕분에 `secrets.toml`과 `.dart_cache`는 올라가지 않습니다.

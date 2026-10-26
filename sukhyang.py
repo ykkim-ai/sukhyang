@@ -220,7 +220,8 @@ def analyze(client, corp, deposit_rate=None, rate_date=None, share_basis="year",
             div = parse_dividend(client.dividend(code, y))
         except DartError:
             div = parse_dividend(None)
-        rec.update(dps=div["dps"], payout=div["payout"])
+        rec.update(dps=div["dps"], payout=div["payout"], div_yield=div["yield"],
+                   div_total=None if div["total_mil"] is None else div["total_mil"] * 1e6)
         recs[y] = rec
         if rec.get("rcept_no"):
             sources.append((f"{y}년 사업보고서({FS_NAME[fs]})", rec["rcept_no"]))
@@ -447,6 +448,45 @@ def ttm_summary(res):
             "net_cash": q["net_cash"]["net_cash"] if q.get("net_cash") else None}
 
 
+def dividend_history(res):
+    """연도별 배당 내역(최근 연도부터)과 요약 문장. 사업보고서 배당 공시만 사용(추가 조회 없음)."""
+    price = res.get("price")
+    years = [y for y in res["years"] if not res["recs"][y].get("missing")]
+    rows = []
+    for y in reversed(years):
+        r = res["recs"][y]
+        dps = r.get("dps")
+        prev = res["recs"].get(y - 1, {}).get("dps")
+        chg = (dps / prev - 1) * 100 if dps is not None and prev else None
+        rows.append({"year": y, "dps": dps, "change": chg, "payout": r.get("payout"),
+                     "yield": r.get("div_yield"),
+                     "yield_now": dps / price * 100 if dps is not None and price else None,
+                     "total": r.get("div_total")})
+    def cut(x, older):
+        """감액: 주당배당금이 줄고, 배당금 총액도 줄었을 때 (액면분할로 주당배당금만 준 경우 제외)"""
+        if x["dps"] is None or not older["dps"] or x["dps"] >= older["dps"]:
+            return False
+        return not (x["total"] and older["total"] and x["total"] >= older["total"])
+
+    paid = [x for x in rows if x["dps"]]
+    streak = 0
+    for i, x in enumerate(rows):  # 최근 연도부터 배당이 있고 감액이 없던 해 수
+        if not x["dps"]:
+            break
+        streak += 1
+        if i + 1 >= len(rows) or not rows[i + 1]["dps"] or cut(x, rows[i + 1]):
+            break
+    cuts = [x["year"] for i, x in enumerate(rows) if i + 1 < len(rows) and cut(x, rows[i + 1])]
+    splits = [x["year"] for i, x in enumerate(rows) if i + 1 < len(rows) and x["dps"] is not None
+              and rows[i + 1]["dps"] and x["dps"] < rows[i + 1]["dps"] and not cut(x, rows[i + 1])]
+    summary = (f"최근 {len(rows)}년 중 {len(paid)}년 배당"
+               + (f", 최근 {streak}년 연속 배당(감액 없음)" if streak else ", 최근 연도 배당 없음")
+               + (f", 감액 {len(cuts)}회({', '.join(map(str, sorted(cuts)))}년)" if cuts else ", 감액 없음")
+               + (f" · {', '.join(map(str, sorted(splits)))}년은 주당배당금이 줄었지만 배당금 총액은 늘어 "
+                  "액면분할·주식수 변화로 보고 감액에서 뺐습니다" if splits else ""))
+    return rows, summary
+
+
 def build_report(res, grade=None, memo=""):
     c, L = res["corp"], res["latest"]
     e0, e1, e2 = res["eps"]
@@ -470,10 +510,16 @@ def build_report(res, grade=None, memo=""):
               f"결산월: {info.get('acc_mt', '확인 불가')}월 / 업종코드: {info.get('induty_code', '확인 불가')}",
               "- 사업 구조는 사업보고서 'II. 사업의 내용'에서 확인하세요.", ""]
 
-    lines += ["## 2. 최근 10년 재무 요약 (금액: 억원, 주당: 원)", "",
+    lines += ["## 2. 최근 10년 재무 요약 (금액: 억원, 주당: 원, 최근 연도부터)", "",
               "| 연도 | 매출액 | 영업이익 | 순이익 | EPS | BPS | ROE | 영업CF | FCF | 주당배당 | 순현금 |",
               "|---|---|---|---|---|---|---|---|---|---|---|"]
-    for y in res["years"]:
+    t = ttm_summary(res)
+    if t:
+        lines.append("| {} | {} | {} | {} | {} | {} | {} | - | - | - | {} |".format(
+            f"**{t['label']}**", eok(t["revenue"]), eok(t["op"]), eok(t["ni"]),
+            "-" if t["eps"] is None else f"{t['eps']:,.0f}", "-" if t["bps"] is None else f"{t['bps']:,.0f}",
+            "-" if t["roe"] is None else f"{t['roe']:.1f}%", eok(t["net_cash"])))
+    for y in reversed(res["years"]):
         r = res["recs"][y]
         if r.get("missing"):
             lines.append(f"| {y} | 자료 없음 |||||||||| ")
@@ -485,14 +531,20 @@ def build_report(res, grade=None, memo=""):
             "-" if r.get("roe") is None else f"{r['roe']:.1f}%",
             eok(r.get("ocf")), eok(r.get("fcf")),
             "-" if r.get("dps") is None else f"{r['dps']:,.0f}", eok(r.get("net_cash"))))
-    t = ttm_summary(res)
     if t:
-        lines.append("| {} | {} | {} | {} | {} | {} | {} | - | - | - | {} |".format(
-            f"**{t['label']}**", eok(t["revenue"]), eok(t["op"]), eok(t["ni"]),
-            "-" if t["eps"] is None else f"{t['eps']:,.0f}", "-" if t["bps"] is None else f"{t['bps']:,.0f}",
-            "-" if t["roe"] is None else f"{t['roe']:.1f}%", eok(t["net_cash"])))
         lines += ["", f"{t['label']}: {res['quarter']['label']}까지 반영한 최근 12개월 실적, "
                       "BPS·순현금은 최신 분기말 기준"]
+
+    drows, dsum = dividend_history(res)
+    num = lambda v, f: "-" if v is None else format(v, f)  # noqa: E731
+    lines += ["", "### 배당 내역 (보통주, 최근 연도부터)", "", dsum, "",
+              "| 연도 | 주당배당금 | 전년 대비 | 배당성향 | 시가배당률(공시) | 현재가 기준 수익률 | 배당금 총액(억원) |",
+              "|---|---|---|---|---|---|---|"]
+    for x in drows:
+        lines.append(f"| {x['year']} | {num(x['dps'], ',.0f')} | {num(x['change'], '+.1f')}{'%' if x['change'] is not None else ''} | "
+                     f"{num(x['payout'], '.1f')} | {num(x['yield'], '.2f')} | {num(x['yield_now'], '.2f')} | {eok(x['total'])} |")
+    lines += ["", "- 시가배당률은 회사가 공시한 값(배당기준일 무렵 주가 기준), 현재가 기준 수익률은 그 해 주당배당금 ÷ 현재 주가입니다.",
+              "- 배당성향·시가배당률 단위는 %입니다. 특별배당 여부는 사업보고서에서 확인하세요."]
 
     lines += ["", "## 3~6. 숙향의 네 가지 투자조건", "", "| 조건 | 실제 수치 | 기준 | 판정 |", "|---|---|---|---|"]
     for row in res["conditions"]:
