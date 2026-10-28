@@ -10,7 +10,8 @@ import pandas as pd
 import streamlit as st
 
 from data import CACHE_DIR, DartClient, DartError, FS_NAME
-from sukhyang import GRADES, analyze, build_report, dividend_history, ttm_summary
+from sukhyang import (FSCORE_NOTE, GRADES, analyze, build_report, dividend_history, fscore_label,
+                      ttm_summary)
 
 PRICE_REFRESH = 300  # 초. 이 간격이 지나 다시 분석하면 주가·당해 연도 공시를 새로 받는다
 
@@ -281,6 +282,16 @@ def render_result(res, k=""):
         with st.expander("자료 관련 참고사항", expanded=True):
             for n in res["notes"]:
                 st.write("• " + n)
+
+    # 참고 점수 (숙향 판정과 별개)
+    st.subheader("F-Score (퀄리티 참고)")
+    fs_ = res.get("fscore")
+    if fs_:
+        st.write(f"**{fscore_label(fs_)}** · {fs_['year']}년과 {fs_['prev']}년 사업보고서 비교")
+        st.dataframe(pd.DataFrame(fs_["items"]), hide_index=True, width="stretch")
+        st.caption(FSCORE_NOTE)
+    else:
+        st.write("전년 사업보고서 자료가 없어 계산하지 못했습니다.")
 
     # 종합 판단 (사용자)
     st.subheader("종합 투자 판단")

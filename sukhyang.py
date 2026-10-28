@@ -112,6 +112,10 @@ def _year_record(rows, fs, notes, y):
     else:
         rec["ni"] = extract(rows, "ni_total")
         rec["equity"] = extract(rows, "equity_total")
+    for k, f in (("assets", "assets"), ("ca", "current_assets"), ("cl", "current_liab"),
+                 ("ncl", "noncurrent_liab"), ("gp", "gross_profit"), ("cogs", "cogs")):
+        rec[k] = extract(rows, f)
+    rec["assets_begin"] = extract(rows, "assets", fields=("frmtrm_amount",))  # 기초 자산 = 같은 보고서의 전기말
     if rec["capex"] is not None:
         rec["capex"] = abs(rec["capex"])
     rec["fcf"] = rec["ocf"] - rec["capex"] if rec["ocf"] is not None and rec["capex"] is not None else None
@@ -340,7 +344,7 @@ def analyze(client, corp, deposit_rate=None, rate_date=None, share_basis="year",
         "eps_labels": basis["labels"], "bps_label": basis["bps_label"], "basis_name": basis["name"],
         "alt": alt if alt and alt["iv"] is not None else None,
         "discount": discount_rate(iv, price), "upside": upside(iv, price),
-        "conservative": conservative, "conditions": conditions,
+        "conservative": conservative, "conditions": conditions, "fscore": fscore(recs, latest),
         "net_cash_detail": nc_detail, "net_cash_basis": nc_basis,
         "industry_flag": next((v for k, v in AVOID_INDUSTRY.items() if induty.startswith(k)), None),
         "is_finance": induty.startswith(FINANCE_PREFIX),
@@ -416,6 +420,101 @@ def risk_signals(res):
     if res.get("industry_flag"):
         out.append(f"업종 참고: {res['industry_flag']} — 숙향이 개인적으로 기피한다고 밝힌 업종군입니다(조건 판정과 별개).")
     return out
+
+
+# ───────────────────────── 참고: 피오트로스키 F-Score (숙향 판정과 별개) ─────────────────────────
+
+def _ratio(a, b):
+    return a / b if a is not None and b else None
+
+
+def _split_like(before, after):
+    """발행주식수가 0.5배 단위 정수배 가까이 늘면 액면분할·무상증자로 본다(돈이 들어오지 않는 주식수 증가)."""
+    r = after / before
+    return r >= 1.5 and abs(r * 2 - round(r * 2)) < 0.01
+
+
+def fscore(recs, latest):
+    """최근 사업연도와 전년 사업보고서를 비교한 9개 항목. 전년 자료가 없으면 None."""
+    cur, prev = recs.get(latest, {}), recs.get(latest - 1, {})
+    if not prev or cur.get("missing") or prev.get("missing"):
+        return None
+    y0, y1 = latest, latest - 1
+
+    def roa(r):
+        return _ratio(r.get("ni"), r.get("assets_begin") or r.get("assets"))
+
+    def leverage(r):
+        return _ratio(r.get("ncl"), r.get("assets"))
+
+    def liquidity(r):
+        return _ratio(r.get("ca"), r.get("cl"))
+
+    def margin(r):
+        gp = r.get("gp")
+        if gp is None and r.get("revenue") is not None and r.get("cogs") is not None:
+            gp = r["revenue"] - abs(r["cogs"])
+        return _ratio(gp, r.get("revenue"))
+
+    def turnover(r):
+        return _ratio(r.get("revenue"), r.get("assets_begin") or r.get("assets"))
+
+    def p(x, d=1):
+        return "-" if x is None else f"{x * 100:.{d}f}%"
+
+    def both(a, b, f=p):
+        return f"{y0}년 {f(a)} / {y1}년 {f(b)}"
+
+    def up(a, b):
+        return None if a is None or b is None else a > b
+
+    items = []
+
+    def add(group, name, rule, ok, shown):
+        items.append({"구분": group, "항목": name, "기준": rule, "실제 수치": shown,
+                      "판정": "확인 불가" if ok is None else ("통과" if ok else "미통과")})
+
+    r0, r1 = roa(cur), roa(prev)
+    add("수익성", "순이익 흑자(ROA)", "ROA > 0", None if r0 is None else r0 > 0, f"{y0}년 {p(r0)}")
+    ocf, ni = cur.get("ocf"), cur.get("ni")
+    add("수익성", "영업현금흐름 흑자", "영업CF > 0", None if ocf is None else ocf > 0, f"{y0}년 {eok(ocf)}억원")
+    add("수익성", "ROA 개선", "전년보다 높음", up(r0, r1), both(r0, r1))
+    add("수익성", "이익의 질", "영업CF > 순이익", None if None in (ocf, ni) else ocf > ni,
+        f"영업CF {eok(ocf)}억 / 순이익 {eok(ni)}억")
+
+    l0, l1 = leverage(cur), leverage(prev)
+    add("재무 건전성", "장기부채 비율 감소", "비유동부채 ÷ 자산총계가 늘지 않음",
+        None if None in (l0, l1) else l0 <= l1, both(l0, l1))
+    q0, q1 = liquidity(cur), liquidity(prev)
+    add("재무 건전성", "유동비율 개선", "전년보다 높음", up(q0, q1), both(q0, q1, lambda x: p(x, 0)))
+    s0, s1 = cur.get("shares") or {}, prev.get("shares") or {}
+    a, b = s1.get("issued"), s0.get("issued")
+    if not a or not b or s0.get("basis") != s1.get("basis"):
+        add("재무 건전성", "신주 발행 없음", "발행주식수가 늘지 않음", None, "주식수 자료 확인 불가")
+    else:
+        split = b > a and _split_like(a, b)
+        add("재무 건전성", "신주 발행 없음", "발행주식수가 늘지 않음", b <= a or split,
+            f"{y1}년 {a:,.0f}주 → {y0}년 {b:,.0f}주" + (" (액면분할·무상증자로 추정)" if split else ""))
+
+    m0, m1 = margin(cur), margin(prev)
+    add("효율성", "매출총이익률 개선", "전년보다 높음", up(m0, m1), both(m0, m1))
+    t0, t1 = turnover(cur), turnover(prev)
+    add("효율성", "자산회전율 개선", "전년보다 높음", up(t0, t1),
+        both(t0, t1, lambda x: "-" if x is None else f"{x:.3f}회"))
+
+    return {"year": y0, "prev": y1, "items": items,
+            "score": sum(i["판정"] == "통과" for i in items),
+            "count": sum(i["판정"] != "확인 불가" for i in items)}
+
+
+def fscore_label(fs):
+    n = len(fs["items"])
+    return f"{fs['score']}/{fs['count']}점" + (f" ({n - fs['count']}개 항목 계산 불가)" if fs["count"] < n else "")
+
+
+FSCORE_NOTE = ("피오트로스키는 8~9점을 재무 체력이 좋아지는 회사, 0~2점을 약해지는 회사로 봤습니다. "
+               "숙향 판정에는 반영하지 않는 참고 점수입니다. ROA·자산회전율은 기초(전년말) 자산총계 기준, "
+               "순이익은 지배주주 순이익, 장기부채는 비유동부채 전체를 썼습니다.")
 
 
 # ───────────────────────── 리포트(Markdown) ─────────────────────────
@@ -596,6 +695,16 @@ def build_report(res, grade=None, memo=""):
     lines += ["", "## 12. 장기 실적 검증 (검토 신호)", ""] + [f"- {s}" for s in res["risks"]]
     if res["notes"]:
         lines += ["", "자료 관련 참고사항", ""] + [f"- {n}" for n in res["notes"]]
+
+    fs_ = res.get("fscore")
+    lines += ["", "## 참고. 피오트로스키 F-Score (숙향 판정과 별개)", ""]
+    if fs_:
+        lines += [f"- 점수: **{fscore_label(fs_)}** ({fs_['year']}년과 {fs_['prev']}년 사업보고서 비교)", "",
+                  "| 구분 | 항목 | 기준 | 실제 수치 | 판정 |", "|---|---|---|---|---|"]
+        lines += [f"| {i['구분']} | {i['항목']} | {i['기준']} | {i['실제 수치']} | {i['판정']} |" for i in fs_["items"]]
+        lines += ["", f"- {FSCORE_NOTE}"]
+    else:
+        lines.append("- 전년 사업보고서 자료가 없어 계산하지 못했습니다.")
 
     lines += ["", "## 13. 종합 투자 판단", "",
               f"- 최종 등급(사용자 판단): **{grade or '미정'}**"]

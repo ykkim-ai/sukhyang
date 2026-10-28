@@ -266,6 +266,15 @@ ACCOUNTS = {
                         exact=("매출채권", "매출채권및기타채권", "매출채권및기타유동채권"),
                         prefix=("매출채권",), exclude=("장기", "비유동")),
     "inventory": dict(sj_divs=("BS",), ids=("ifrs-full_Inventories",), exact=("재고자산",), prefix=("재고자산",)),
+    # F-Score용
+    "assets": dict(sj_divs=("BS",), ids=("ifrs-full_Assets",), exact=("자산총계",), prefix=("자산총계",)),
+    "current_assets": dict(sj_divs=("BS",), ids=("ifrs-full_CurrentAssets",), exact=("유동자산",), prefix=("유동자산",)),
+    "current_liab": dict(sj_divs=("BS",), ids=("ifrs-full_CurrentLiabilities",), exact=("유동부채",), prefix=("유동부채",)),
+    "noncurrent_liab": dict(sj_divs=("BS",), ids=("ifrs-full_NoncurrentLiabilities",),
+                            exact=("비유동부채",), prefix=("비유동부채",)),
+    "gross_profit": dict(sj_divs=("IS", "CIS"), ids=("ifrs-full_GrossProfit",),
+                         exact=("매출총이익", "매출총이익(손실)", "매출총손익"), prefix=("매출총이익",)),
+    "cogs": dict(sj_divs=("IS", "CIS"), ids=("ifrs-full_CostOfSales",), exact=("매출원가",), prefix=("매출원가",)),
 }
 
 
