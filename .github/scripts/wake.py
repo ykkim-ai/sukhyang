@@ -18,6 +18,12 @@ def main() -> int:
         page.goto(URL, wait_until="domcontentloaded", timeout=90_000)
         page.wait_for_timeout(10_000)
 
+        # 비공개 앱이면 로그인 안 된 방문자는 '접근 권한 없음' 페이지로 넘어가 앱을 깨우지 못한다
+        if "errors/not_found" in page.url or "do not have access" in page.inner_text("body"):
+            print("앱에 접근할 수 없습니다(비공개 앱). 이 방문으로는 앱을 깨울 수 없습니다.")
+            browser.close()
+            return 1
+
         button = page.get_by_role("button", name=WAKE_TEXT)
         if button.count() > 0:
             print("앱이 잠들어 있어 깨우는 중...")
