@@ -9,7 +9,6 @@ import os
 import re
 import time
 import zipfile
-from concurrent.futures import ThreadPoolExecutor
 import xml.etree.ElementTree as ET
 
 import requests
@@ -41,17 +40,10 @@ class DartClient:
         self.key = api_key.strip()
         self.cache_dir = cache_dir
         os.makedirs(cache_dir, exist_ok=True)
-        self._mem = {}  # 이번 분석 동안의 응답 보관 (prefetch로 미리 받은 것 포함)
 
-    def prefetch(self, calls, workers=8):
-        """[(메서드 이름, 인자...), ...]를 동시에 받아 둔다. 실패한 것은 실제 호출 때 다시 받는다."""
-        def run(call):
-            try:
-                getattr(self, call[0])(*call[1:])
-            except Exception:  # noqa: BLE001
-                pass
-        with ThreadPoolExecutor(max_workers=workers) as ex:
-            list(ex.map(run, calls))
+    def _hide(self, msg):
+        """오류 문구에 섞인 인증키를 가린다 (요청 주소에 키가 들어 있음)."""
+        return str(msg).replace(self.key, "****")
 
     def _cache_path(self, endpoint, params):
         raw = endpoint + json.dumps(params, sort_keys=True)
@@ -60,13 +52,6 @@ class DartClient:
     def _get(self, endpoint, params, cacheable=False):
         """status 000이면 data, 013(자료 없음)이면 None, 그 외는 DartError."""
         path = self._cache_path(endpoint, params)
-        if path in self._mem:
-            return self._mem[path]
-        v = self._fetch(endpoint, params, cacheable, path)  # 오류는 보관하지 않아 실제 호출 때 다시 시도
-        self._mem[path] = v
-        return v
-
-    def _fetch(self, endpoint, params, cacheable, path):
         if cacheable and os.path.exists(path) and time.time() - os.path.getmtime(path) < CACHE_TTL:
             with open(path, encoding="utf-8") as f:
                 return json.load(f)
@@ -80,7 +65,7 @@ class DartClient:
                 break
             except (requests.RequestException, ValueError) as e:
                 if attempt == 2:
-                    raise DartError(f"DART 요청 실패({endpoint}): {e}")
+                    raise DartError(f"DART 요청 실패({endpoint}): {self._hide(e)}")
                 time.sleep(1.5)
         status = data.get("status")
         if status == "013":
@@ -106,12 +91,12 @@ class DartClient:
                 break
             except requests.RequestException as e:
                 if attempt == 2:
-                    raise DartError(f"기업코드 목록 요청 실패(인터넷 연결을 확인하세요): {e}")
+                    raise DartError(f"기업코드 목록 요청 실패(인터넷 연결을 확인하세요): {self._hide(e)}")
                 time.sleep(1.5)
         try:
             z = zipfile.ZipFile(io.BytesIO(r.content))
         except zipfile.BadZipFile:
-            raise DartError(f"기업코드 목록을 받지 못했습니다: {r.text[:200]}")
+            raise DartError(f"기업코드 목록을 받지 못했습니다: {self._hide(r.text[:200])}")
         root = ET.fromstring(z.read(z.namelist()[0]))
         items = []
         for el in root.iter("list"):

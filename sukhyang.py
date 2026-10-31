@@ -196,19 +196,8 @@ def analyze(client, corp, deposit_rate=None, rate_date=None, share_basis="year",
     code = corp["corp_code"]
     notes, sources = [], []
 
-    # DART 호출을 하나씩 기다리지 않도록 필요한 공시를 동시에 미리 받아 둔다
-    y0 = today.year
-    client.prefetch([("company", code)] +
-                    [("fin_all", code, y, REPRT_FY, f) for y in (y0 - 1, y0 - 2) for f in ("CFS", "OFS")])
     info = client.company(code) or {}
     latest, fs, latest_rows = _find_latest(client, code, today)
-    if latest is not None:
-        calls = []
-        for y in range(latest - 9, latest + 1):
-            calls += [("fin_all", code, y, REPRT_FY, fs), ("stock_total", code, y), ("dividend", code, y)]
-        for r in (REPRT_Q3, REPRT_H1, REPRT_Q1):
-            calls += [("fin_all", code, latest + 1, r, fs), ("stock_total", code, latest + 1, r)]
-        client.prefetch(calls)
     if latest is None:
         return {"error": "최근 2개 사업연도의 사업보고서 재무제표를 DART에서 찾지 못했습니다.", "corp": corp}
 
