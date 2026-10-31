@@ -1,0 +1,23 @@
+name: Keep Streamlit awake
+
+on:
+  schedule:
+    # 6시간마다 접속 (Streamlit 무료 앱은 약 12시간 미접속 시 잠듦)
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+
+jobs:
+  wake:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Playwright
+        run: |
+          pip install playwright
+          python -m playwright install --with-deps chromium
+      - name: Visit app
+        run: python .github/scripts/wake.py
