@@ -42,6 +42,11 @@ Markdown 리포트로 내려받습니다. 최종 등급(매수 검토 후보 / �
 
 4. 배포 후 앱 **Settings → Sharing**에서 본인만 볼 수 있게 설정합니다.
 
+Streamlit 서버 IP가 DART에 막히면(접속 시간 초과) 중계 서버(Vercel, 서울 리전)를 거치게 할 수 있습니다. Secrets에 아래 두 줄을 추가하고, 막힘이 풀리면 지우면 됩니다. 토큰은 중계 서버 폴더의 `.relay-token.txt`에 있습니다.
+
+        DART_RELAY_URL = "https://dart-relay-sage.vercel.app/api"
+        DART_RELAY_TOKEN = "중계_토큰"
+
 클라우드에서는 주가 자동 조회가 막힐 수 있고(그때는 직접 입력), 서버가 재시작되면 `.dart_cache`가 비워져 첫 분석이 다시 1분쯤 걸립니다.
 `secrets.toml`이나 Secrets에 키를 넣으면 키는 화면에 표시되지 않고 서버에서만 쓰입니다.
 

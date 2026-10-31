@@ -14,6 +14,18 @@ import xml.etree.ElementTree as ET
 import requests
 
 BASE_URL = "https://opendart.fss.or.kr/api"
+# 서버 IP가 DART에 막혔을 때 쓰는 중계 서버 (Streamlit Secrets의 최상위 값은 환경변수로도 들어온다)
+#   DART_RELAY_URL = "https://dart-relay-sage.vercel.app/api", DART_RELAY_TOKEN = "..."  → 비우면 DART에 직접 접속
+CONNECT_TIMEOUT = 10  # 접속이 안 되면 오래 기다리지 않고 오류를 낸다
+
+
+def _dart_request(endpoint, params, read_timeout):
+    relay = os.environ.get("DART_RELAY_URL", "").strip().rstrip("/")
+    if relay:
+        headers = {"x-relay-token": os.environ.get("DART_RELAY_TOKEN", "").strip()}
+        return requests.get(f"{relay}/{endpoint}", params=params, headers=headers,
+                            timeout=(CONNECT_TIMEOUT, read_timeout))
+    return requests.get(f"{BASE_URL}/{endpoint}", params=params, timeout=(CONNECT_TIMEOUT, read_timeout))
 REPRT_FY, REPRT_H1, REPRT_Q1, REPRT_Q3 = "11011", "11012", "11013", "11014"
 REPRT_NAME = {
     REPRT_FY: "사업보고서",
@@ -59,7 +71,7 @@ class DartClient:
         data = None
         for attempt in range(3):
             try:
-                r = requests.get(f"{BASE_URL}/{endpoint}", params=query, timeout=30)
+                r = _dart_request(endpoint, query, 30)
                 r.raise_for_status()
                 data = r.json()
                 break
@@ -86,7 +98,7 @@ class DartClient:
                 return json.load(f)
         for attempt in range(3):
             try:
-                r = requests.get(f"{BASE_URL}/corpCode.xml", params={"crtfc_key": self.key}, timeout=60)
+                r = _dart_request("corpCode.xml", {"crtfc_key": self.key}, 60)
                 r.raise_for_status()
                 break
             except requests.RequestException as e:
