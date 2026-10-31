@@ -17,6 +17,12 @@ def secret(name, default=""):
     return v if v not in (None, "") else os.environ.get(name, default)
 
 
+# DART 중계 서버 설정을 data.py가 읽는 환경변수로 넘긴다 (Secrets에 없으면 DART에 직접 접속)
+for _k in ("DART_RELAY_URL", "DART_RELAY_TOKEN"):
+    if secret(_k):
+        os.environ[_k] = str(secret(_k))
+
+
 def saved_rate():
     try:
         return min(max(float(secret("DEPOSIT_RATE", 0)), 0.0), 20.0)
